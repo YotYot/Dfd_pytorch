@@ -51,11 +51,18 @@ class depth_segmentation_dataset(data.Dataset):
                         label_path = path.join(label_dir,label)
                         patch_file = Image.open(patch_path)
                         patch_arr = np.array(patch_file)
-                        self.train_data.append(patch_arr)
                         label_file = Image.open(label_path)
                         label_arr = np.array(label_file)
+                        if patch_arr.shape[0] == 436:
+                            patch_arr_extended = np.zeros((512,1024,3), dtype=np.uint8)
+                            patch_arr_extended[38:-38,:,:] = patch_arr
+                            patch_arr = patch_arr_extended
+                            label_arr_extended = np.zeros((512,1024), dtype=np.uint8)
+                            label_arr_extended[38:-38, :] = label_arr
+                            label_arr = label_arr_extended
                         #Make the classes 0-14 instead of 1-15
-                        label_arr -= 1
+                        # label_arr -= 1
+                        self.train_data.append(patch_arr)
                         self.train_labels.append(label_arr)
                 self.train_data = np.expand_dims(self.train_data,axis=0)
                 self.train_labels = np.expand_dims(self.train_labels,axis=0)
@@ -92,11 +99,18 @@ class depth_segmentation_dataset(data.Dataset):
                         label_path = path.join(label_dir, label)
                         patch_file = Image.open(patch_path)
                         patch_arr = np.array(patch_file)
-                        self.test_data.append(patch_arr)
                         label_file = Image.open(label_path)
                         label_arr = np.array(label_file)
+                        if patch_arr.shape[0] == 436:
+                            patch_arr_extended = np.zeros((512,1024,3), dtype=np.uint8)
+                            patch_arr_extended[38:-38,:,:] = patch_arr
+                            patch_arr = patch_arr_extended
+                            label_arr_extended = np.zeros((512,1024), dtype=np.uint8)
+                            label_arr_extended[38:-38, :] = label_arr
+                            label_arr = label_arr_extended
                         # Make the classes 0-14 instead of 1-15
-                        label_arr -= 1
+                        # label_arr -= 1
+                        self.test_data.append(patch_arr)
                         self.test_labels.append(label_arr)
                 self.test_data = np.expand_dims(self.test_data, axis=0)
                 self.test_labels = np.expand_dims(self.test_labels, axis=0)
@@ -169,8 +183,8 @@ def mv_30_percent_for_testing(train_dir=None, test_dir=None):
 
 
 if __name__ == '__main__':
-    # mv_30_percent_for_testing(train_dir='/home/yotamg/data/jpg_images/patches', test_dir='/home/yotamg/data/jpg_images/test/patches')
-    cls1 = depth_segmentation_dataset('a', train=True,load_pickle=False,train_dir='/home/yotamg/data/jpg_images/patches', label_dir='/home/yotamg/data/depth_pngs/patches')
+     mv_30_percent_for_testing(train_dir='/home/yotamg/data/jpg_images/', test_dir='/home/yotamg/data/jpg_images/test/')
+    #cls1 = depth_segmentation_dataset('a', train=True,load_pickle=False,train_dir='/home/yotamg/data/jpg_images/patches', label_dir='/home/yotamg/data/depth_pngs/patches')
     # cls2 = depth_segmentation_dataset('a', train=False, load_pickle=False,test_dir='/home/yotamg/data/jpg_images/test/patches',label_dir='/home/yotamg/data/depth_pngs/patches')
     # mv_30_percent_for_testing(train_dir='/home/yotamg/data/jpg_images/', test_dir='/home/yotamg/data/jpg_images/test/')
 

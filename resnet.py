@@ -65,7 +65,7 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=15, mode='segmentation', image_size='small'):
+    def __init__(self, block, num_blocks, num_classes=16, mode='segmentation', image_size='small'):
         super(ResNet, self).__init__()
         self.in_planes = 64
         self.mode = mode
@@ -78,11 +78,12 @@ class ResNet(nn.Module):
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
         self.linear = nn.Linear(512*block.expansion, num_classes)
         if self.mode == 'segmentation':
-            self.conv2 = nn.Conv2d(512, 15, 1)
-            if self.image_size == 'small':
-                self.conv_transpose = nn.ConvTranspose2d(15,15,29)
-            else:
-                self.conv_transpose = nn.ConvTranspose2d(15, 15, (509, 1021))
+            self.conv2 = nn.Conv2d(512,512,2,stride=2)
+            self.conv3 = nn.Conv2d(512, num_classes, 1)
+            # if self.image_size == 'small':
+            self.conv_transpose = nn.ConvTranspose2d(num_classes,num_classes,kernel_size=16,stride=16)
+            # else:
+            # self.conv_transpose = nn.ConvTranspose2d(num_classes, num_classes, (449, 897))
 
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1]*(num_blocks-1)
@@ -100,7 +101,9 @@ class ResNet(nn.Module):
         out = self.layer4(out)
         if self.mode == 'segmentation':
             out = self.conv2(out)
+            out = self.conv3(out)
             out = self.conv_transpose(out)
+            out = out.contiguous()
         else:
             out = F.avg_pool2d(out, 4)
             out = out.view(out.size(0), -1)
@@ -108,8 +111,8 @@ class ResNet(nn.Module):
         return out
 
 
-def ResNet18(mode='segmentation', image_size='small'):
-    return ResNet(BasicBlock, [2,2,2,2], mode=mode, image_size=image_size)
+def ResNet18(mode='segmentation', image_size='small', num_classes=16):
+    return ResNet(BasicBlock, [2,2,2,2], mode=mode, image_size=image_size, num_classes=num_classes)
 
 def ResNet34():
     return ResNet(BasicBlock, [3,4,6,3])
