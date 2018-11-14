@@ -3,8 +3,8 @@ import torchvision
 import torchvision.transforms as transforms
 from depth_classification_dataset import depth_classification_dataset
 from depth_segmentation_dataset import depth_segmentation_dataset
-from depth_raw_big_image_segmentation_dataset import depth_raw_segmentation_dataset
 from nyu_depth_segmentation_dataset import nyu_depth_segmentation_dataset
+from cont_depth_segmentation_dataset import cont_depth_segmentation_dataset
 from resnet import ResNet18, ResNet50
 import os
 from PIL import Image
@@ -16,85 +16,31 @@ import torch.optim as optim
 import random
 import time
 import pickle
+from cont_seg_net import Net
 
 
 
 RES_OUT = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'resources_out')
 
-class Net(nn.Module):
-    def __init__(self,device, num_class=15, mode='classification', channels=64, skip_layer=True):
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(3, 16, 5, padding=2)
-        self.batch_norm1 = nn.BatchNorm2d(16, momentum=0.99)
-        self.pool1 = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(16, 36, 5,padding=2)
-        self.batch_norm2 = nn.BatchNorm2d(36, momentum=0.99)
-        self.pool2 = nn.MaxPool2d(2, 2)
-        self.conv3 = nn.Conv2d(36, 64, 5,padding=2)
-        self.batch_norm3 = nn.BatchNorm2d(64, momentum=0.99)
-        self.pool3 = nn.MaxPool2d(2, 2,ceil_mode=True)
-        self.conv4 = nn.Conv2d(64, 128, 3,padding=1)
-        self.batch_norm4 = nn.BatchNorm2d(128, momentum=0.99)
-        self.pool4 = nn.MaxPool2d(2, 2)
-        self.conv5 = nn.Conv2d(128,256,3, padding=1)
-        self.batch_norm5 = nn.BatchNorm2d(256, momentum=0.99)
-        self.pool5 = nn.MaxPool2d(2,2)
-        self.conv6 = nn.Conv2d(256, num_class, 1)
-        self.dense = nn.Linear(512, 256)
-        self.dense2 = nn.Linear(256, num_class)
-        self.upsampling = nn.ConvTranspose2d(in_channels=num_class, out_channels=num_class,kernel_size=32, stride=32)
-        self.conv7_from_pool4 = nn.Conv2d(128, num_class, kernel_size=1)
-        self.upsampling16 = nn.ConvTranspose2d(in_channels=num_class, out_channels=num_class, kernel_size=16,stride=16)
-        self.device = device
-        self.num_class = num_class
-        self.mode = mode
-        self.skip_layer = skip_layer
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.batch_norm1(x)
-        x = F.relu(x)
-        x = self.pool1(x)
-        x = F.relu(self.batch_norm2(self.conv2(x)))
-        x = self.pool2(x)
-        x = F.relu(self.batch_norm3(self.conv3(x)))
-        x = self.pool3(x)
-        x = F.relu(self.batch_norm4(self.conv4(x)))
-        x = self.pool4(x)
-        skip = x
-        x = F.relu(self.batch_norm5(self.conv5(x)))
-        x = self.pool5(x)
-        x = self.conv6(x)
-        if self.mode == 'segmentation':
-            x = self.upsampling(x)
-            if self.skip_layer:
-                skip_umsampled_aligned = torch.zeros_like(x)
-                skip_upsampled = self.upsampling16(self.conv7_from_pool4(skip))
-                if (x.shape[3] != skip_upsampled.shape[3]):
-                    gap = skip_upsampled.shape[3] - x.shape[3]
-                    skip_umsampled_aligned[:,:,:,:] = skip_upsampled[:,:,:,gap//2:-gap//2]
-                else:
-                    skip_umsampled_aligned = skip_upsampled
-                x = x + skip_umsampled_aligned
-        else:
-            x = x.view(-1, self.num_class)
-        return x
-
-def load_data(mode, image_size, batch_size,dataset=None):
+def load_data(mode, image_size, batch_size,dataset=None,target_mode='discrete'):
 
     transform = transforms.Compose(
         [transforms.ToTensor(),
          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
     if mode == 'segmentation':
-        if image_size == 'small':
+        if target_mode == 'cont':
+            train_dir = '/home/yotamg/data/raw_rgb_images/'
+            test_dir = '/home/yotamg/data/raw_rgb_images/test/'
+            label_dir = '/home/yotamg/data/depth_maps_cont/'
+        elif image_size == 'small':
             train_dir = '/home/yotamg/data/jpg_images/patches'
             test_dir = '/home/yotamg/data/jpg_images/test/patches'
             label_dir = '/home/yotamg/data/depth_pngs/patches'
         else:
             train_dir = '/home/yotamg/data/raw_rgb_images/'
             test_dir = '/home/yotamg/data/raw_rgb_images/test/'
-            label_dir = '/home/yotamg/data/depth_pngs/'
+            label_dir = '/home/yotamg/data/depth_maps/'
     else:
         train_dir = '/home/yotamg/data/rgb/train'
         test_dir = '/home/yotamg/data/rgb/val'
@@ -113,10 +59,16 @@ def load_data(mode, image_size, batch_size,dataset=None):
         testset = nyu_depth_segmentation_dataset(root='./data', train=False, transform=transform, test_dir=test_dir,
                                              label_dir=label_dir, load_pickle=True)
     else:
-        if mode == 'segmentation':
-            trainset = depth_raw_segmentation_dataset(root='./data', train=True, transform=transform, train_dir=train_dir,
+        if mode == 'segmentation' and target_mode == 'discrete':
+            trainset = depth_segmentation_dataset(root='./data', train=True, transform=transform, train_dir=train_dir,
                                                   label_dir=label_dir, load_pickle=True)
-            testset = depth_raw_segmentation_dataset(root='./data', train=False, transform=transform, test_dir=test_dir,
+            testset = depth_segmentation_dataset(root='./data', train=False, transform=transform, test_dir=test_dir,
+                                                 label_dir=label_dir, load_pickle=True)
+        elif mode == 'segmentation' and target_mode == 'cont':
+
+            trainset = cont_depth_segmentation_dataset(root='./data', train=True, transform=transform, train_dir=train_dir,
+                                                  label_dir=label_dir, load_pickle=True)
+            testset = cont_depth_segmentation_dataset(root='./data', train=False, transform=transform, test_dir=test_dir,
                                                  label_dir=label_dir, load_pickle=True)
         else:
             trainset = depth_classification_dataset(root='./data', train=True, transform=transform, train_dir=train_dir,
@@ -133,9 +85,10 @@ def load_data(mode, image_size, batch_size,dataset=None):
 
 
 class DfdConfig(object):
-    def __init__(self, batch_size=64, mode='segmentation', image_size='small', resume_path=os.path.join(RES_OUT,'best_model.pt'), start_epoch=0, end_epoch=50, model_state_name='best_model.pt', num_classes=15, lr=0.01,get_reduced_dataset=False,dataset=None, ordinal= False, skip_layer=True):
+    def __init__(self, batch_size=64, mode='segmentation', target_mode='discrete', image_size='small', resume_path=os.path.join(RES_OUT,'best_model.pt'), start_epoch=0, end_epoch=50, model_state_name='best_model.pt', num_classes=15, lr=0.01,get_reduced_dataset=False,dataset=None, skip_layer=True):
         self.batch_size = batch_size
         self.mode = mode
+        self.target_mode = target_mode
         self.image_size = image_size
         self.resume_path = resume_path
         self.start_epoch = start_epoch
@@ -145,21 +98,21 @@ class DfdConfig(object):
         self.lr = lr
         self.get_reduced_dataset = get_reduced_dataset
         self.dataset = dataset
-        self.ordinal = ordinal
         self.skip_layer = skip_layer
 
 class Dfd(object):
-    def __init__(self, net=None, ordinal_net=None, config=DfdConfig(), device=None):
+    def __init__(self, net=None, config=DfdConfig(), device=None):
         self.config = config
-        self.trainloader, self.testloader = load_data(config.mode,config.image_size, config.batch_size, dataset=config.dataset)
+        self.trainloader, self.testloader = load_data(config.mode,config.image_size, config.batch_size, dataset=config.dataset, target_mode=config.target_mode)
         self.device = device if device else torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.net = net if net else ResNet18(mode=config.mode, image_size=config.image_size, num_classes=self.config.num_classes)
         self.net = (self.net).to(self.device)
-        self.ordinal_net = ordinal_net if ordinal_net else ResNet18(mode=config.mode, image_size=config.image_size, num_classes=self.config.num_classes)
-        self.ordinal_net = (self.ordinal_net).to(self.device)
         if config.mode == 'segmentation':
+            if config.target_mode == 'discrete':
             # self.criterion = nn.CrossEntropyLoss(weight=self.get_class_weights())
-            self.criterion = nn.CrossEntropyLoss(ignore_index=0, weight=self.get_class_weights())
+                self.criterion = nn.CrossEntropyLoss(ignore_index=0, weight=self.get_class_weights())
+            elif config.target_mode == 'cont':
+                self.criterion = nn.MSELoss()
         else:
             self.criterion = nn.CrossEntropyLoss()
             #self.criterion = nn.MSELoss(reduction='elementwise_mean')
@@ -216,19 +169,6 @@ class Dfd(object):
         plt.plot(self.acc_plus_minus_history, color='r')
         plt.show()
 
-
-    def show_random_training_images(self):
-        # get some random training images
-        dataiter = iter(self.trainloader)
-        images, labels = dataiter.next()
-
-        # show images
-        self.imshow(torchvision.utils.make_grid(images))
-        # print labels
-        if not self.config.mode == 'segmentation':
-            print(' '.join('%5s' % self.classes[labels[j]] for j in range(self.config.batch_size)))
-
-
     def resume(self, resume_path=None, ordinal=False):
         if not resume_path:
             resume_path = self.config.resume_path
@@ -237,15 +177,12 @@ class Dfd(object):
                 print("=> loading checkpoint '{}'".format(resume_path))
                 checkpoint = torch.load(resume_path)
                 self.start_epoch = checkpoint['epoch']
-                if ordinal:
-                    self.ordinal_net.load_state_dict(checkpoint['state_dict'],strict=False)
-                else:
-                    self.net.load_state_dict(checkpoint['state_dict'], strict=False)
-                    self.net.state_dict().update(checkpoint['state_dict'])
-                    # self.optimizer.load_state_dict(checkpoint['optimizer'])
-                    self.loss_history = checkpoint['loss_history']
-                    self.acc_history= checkpoint['acc_history']
-                    self.acc_plus_minus_history = checkpoint['acc_plus_minus_history']
+                self.net.load_state_dict(checkpoint['state_dict'], strict=False)
+                self.net.state_dict().update(checkpoint['state_dict'])
+                # self.optimizer.load_state_dict(checkpoint['optimizer'])
+                self.loss_history = checkpoint['loss_history']
+                self.acc_history= checkpoint['acc_history']
+                self.acc_plus_minus_history = checkpoint['acc_plus_minus_history']
                 print("=> loaded checkpoint '{}' (epoch {})"
                       .format(resume_path, checkpoint['epoch']))
             else:
@@ -262,9 +199,13 @@ class Dfd(object):
                 for i, data in enumerate(self.testloader):
                     images, labels = data
                     outputs = self.net(images.to(self.device))
-                    predicted = torch.argmax(outputs.data, dim=1)
-                    predicted_reg = self.reg_conv(outputs.data)
-                    predicted_reg = predicted_reg[0,0,:,:].cpu().numpy()
+                    if config.target_mode == 'discrete':
+                        predicted,_ = torch.argmax(outputs.data, dim=1)
+                    elif config.target_mode == 'cont':
+                          predicted = outputs
+                    #     predicted = torch.round(outputs)
+                    # predicted_reg = self.reg_conv(outputs.data)
+                    # predicted_reg = predicted_reg[0,0,:,:].cpu().numpy()
                     if i == 4:
                         break
                     plt.subplot(4, 4, i*4+1)
@@ -272,9 +213,9 @@ class Dfd(object):
                     plt.subplot(4, 4, i*4+2)
                     plt.imshow(labels[0],cmap='jet')
                     plt.subplot(4, 4, i*4+3)
-                    plt.imshow(predicted[0],cmap='jet')
-                    plt.subplot(4, 4, i*4+4)
-                    plt.imshow(predicted_reg,cmap='jet')
+                    plt.imshow(predicted,cmap='jet')
+                    # plt.subplot(4, 4, i*4+4)
+                    # plt.imshow(predicted_reg,cmap='jet')
                 plt.show()
             else:
                 if load_pickle:
@@ -289,34 +230,26 @@ class Dfd(object):
                 start_time = time.time()
                 big_image_pred = self.net(big_image)
                 print ("Inference time: ", time.time() - start_time)
-                big_image_predicted = torch.argmax(big_image_pred, dim=1)
-                big_image_predicted = big_image_predicted.cpu().numpy()
-                big_image_predicted = np.squeeze(big_image_predicted, axis=0)
+                # predicted_reg = self.reg_conv(big_image_pred)
+                # predicted_reg = predicted_reg[0, 0, :, :].cpu().numpy()
+                big_image_predicted = big_image_pred
+                if config.target_mode != 'cont':
+                    big_image_predicted = torch.argmax(big_image_pred, dim=1)
+                    big_image_predicted = big_image_predicted.cpu().numpy()
+                    big_image_predicted = np.squeeze(big_image_predicted, axis=0)
                 plt.subplot(2, 1, 1)
-                plt.title("Original Image")
-                plt.imshow(orig_image, cmap='jet')
+                plt.title("Big image predictions discrete")
+                plt.imshow(big_image_pred_discrete, cmap='jet')
+                # plt.show()
                 plt.subplot(2,1,2)
                 plt.title("Big image predictions")
                 plt.imshow(big_image_predicted, cmap='jet')
-                plt.imsave('/home/yotamg/pred.jpg', big_image_predicted, cmap='jet')
                 plt.show()
 
-    def first_index_lt(self,data_list, value):
-        '''return the first index less than value from a given list like object'''
-        pred_list = np.zeros(data_list.shape[0], dtype=np.uint8)
-        for i in range(len(pred_list)):
-            try:
-                index = next(data[0] for data in enumerate(data_list[i]) if data[1] < value)
-                pred_list[i] = index
-            except StopIteration:
-                return - 1
-        return pred_list
-
-    def evaluate_model(self, partial=False, threshold=0.5, net=None, ordinal=False, get_ext_class_from_ordinal=False):
+    def evaluate_model(self, partial=False, net=None):
         if not net:
             net = self.net;
         net = net.eval()
-        self.ordinal_net = self.ordinal_net.eval()
         correct = 0
         total = 0
         correct_plus_minus = 0
@@ -329,7 +262,12 @@ class Dfd(object):
                 outputs = net(images)
                 if self.config.mode == 'segmentation':
                     total += labels.flatten().size()[0]
-                    predicted = torch.argmax(outputs.data, dim=1)
+                    if self.config.target_mode == 'discrete':
+                        predicted = torch.argmax(outputs.data, dim=1)
+                    else: #Cont
+                        predicted = torch.round(outputs.data)
+                        predicted = predicted.long()
+                        predicted = torch.unsqueeze(predicted,dim=0)
                     labels = labels.long()
                     correct += (predicted == labels).sum().item()
                     labels_plus = labels + 1
@@ -339,21 +277,18 @@ class Dfd(object):
                     correct_minus = (predicted == labels_minus)
                     correct_plus_minus += (correct_exact | correct_plus | correct_minus).sum().item()
                     pred_np = predicted.cpu().numpy()
+                    pred_np = np.minimum(np.maximum(pred_np, 0),15)
                     labels_np = labels.cpu().numpy()
                     for i in range (pred_np.shape[1]):
                         for j in range (pred_np.shape[2]):
                            self.conf_matrix[labels_np[0][i][j]][pred_np[0][i][j]] += 1
                     if partial and total >= max(100000, pred_np.shape[1] * pred_np.shape[2] * 10): #About 1000 small images
                         break
+                elif self.config.mode == 'segmentation' and self.config.target_mode == 'cont':
+                    total += labels.flatten().size()[0]
                 else:
                     total += labels.size(0)
                     _, predicted = torch.max(outputs.data, 1)
-                    # predicted = self.first_index_lt(outputs, threshold)
-                    if self.config.ordinal or (get_ext_class_from_ordinal and predicted in [0,14]):
-                        outputs = self.ordinal_net(images)
-                        outputs = outputs.cpu().numpy()
-                        predicted = np.minimum(self.config.num_classes-1, np.maximum(0, np.floor(np.sum(outputs))).astype(np.uint8))
-                        #predicted = self.first_index_lt(outputs, threshold)
                     correct += (predicted == labels).sum().item()
                     correct_exact = (predicted == labels)
                     correct_plus = (predicted == labels + 1).item()
@@ -381,26 +316,19 @@ class Dfd(object):
             for i, data in enumerate(self.trainloader, 0):
                 # get the inputs
                 inputs, labels = data
-                if self.config.ordinal:
-                    ord_labels = np.zeros((labels.shape[0], self.config.num_classes))
-                    for ii, label in enumerate(labels):
-                        for j in range(label):
-                            ord_labels[ii, j] = 1
-                    ord_labels = torch.from_numpy(ord_labels)
-                    labels = ord_labels
-                    labels = labels.float()
-                else:
-                    labels = labels.long()
-
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
-                # inputs, labels = inputs.contiguous(), labels.contiguous()
                 # zero the parameter gradients
                 self.optimizer.zero_grad()
 
                 # forward + backward + optimize
                 # inputs = self.transform_image(inputs)
                 outputs = self.net(inputs)
+                if self.config.mode == 'segmentation' and self.config.target_mode == 'cont':
+                    labels = labels.float()
+                else:
+                    labels = labels.long()
                 loss = self.criterion(outputs, labels)
+
                 loss.backward()
                 self.optimizer.step()
 
@@ -441,51 +369,30 @@ class Dfd(object):
                     #     #self.optimizer = optim.SGD(self.net.parameters(), lr=current_lr/10, momentum=0.9)
         print('Finished Training')
 
-    def acc_per_class(self):
-        class_correct = list(0. for i in range(self.config.num_classes))
-        class_total = list(0. for i in range(self.config.num_classes))
-        with torch.no_grad():
-            for data in self.testloader:
-                images, labels = data
-                images, labels = images.to(self.device), labels.to(self.device)
-                outputs = self.net(images)
-                _, predicted = torch.max(outputs, 1)
-                c = (predicted == labels).squeeze()
-                for i in range(4):
-                    label = labels[i]
-                    class_correct[label] += c[i].item()
-                    class_total[label] += 1
-
-        for i in range(self.config.num_classes):
-            print('Accuracy of %5s : %2d %%' % (
-                self.classes[i], 100 * class_correct[i] / class_total[i]))
-
 
     def get_class_weights(self):
-        class_items = np.bincount(np.concatenate(np.concatenate(self.trainloader.dataset.train_labels)), minlength=16)
-        class_weights = 1 / class_items
+        class_items = np.bincount(np.concatenate(np.concatenate(self.trainloader.dataset.train_labels)).astype(np.uint8), minlength=16)
+        class_weights = 1 / (class_items + 1)
         norm_class_weights = class_weights * (1 / min(class_weights))
-        # norm_class_weights[0] = 0
         norm_class_weights[0] = 0
+        # norm_class_weights[15] = 0
         return torch.from_numpy(norm_class_weights).float().to(self.device)
 
+    def show_imgs_cont_and_discrete(self, image, labels):
+        plt.subplot(3,1,1)
+        plt.imshow(labels[0,:,:])
+        plt.subplot(3,1,2)
+        plt.imshow(net(image).detach())
+
 if __name__ == '__main__':
-    # torch.backends.cudnn.enabled = False
     torch.cuda.empty_cache()
     np.set_printoptions(linewidth=320)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    # device = 'cpu'
-    config = DfdConfig(image_size='big', batch_size=16, mode='segmentation', lr=0.001, get_reduced_dataset=False, num_classes=16,dataset='ours', ordinal=False, end_epoch=300)
-    net = Net(device=device, num_class=config.num_classes,mode=config.mode, channels=64)
-    ordinal_net = Net(device=device, num_class=config.num_classes,mode=config.mode, channels=64)
+    # config = DfdConfig(image_size='big', batch_size=16, mode='segmentation', target_mode='cont',lr=0.0001, get_reduced_dataset=False, num_classes=16,dataset='ours', end_epoch=300)
+    config = DfdConfig(image_size='big', batch_size=16, mode='segmentation', lr=0.001,target_mode='cont', get_reduced_dataset=False, num_classes=16,dataset='ours', end_epoch=300)
+    net = Net(device=device, num_class=config.num_classes,mode=config.mode, channels=64, config=config)
     # net = ResNet18(mode='segmentation', num_classes=16,image_size='small')
-    dfd = Dfd(config=config, net=net, ordinal_net=ordinal_net, device=device)
-    # dfd.resume(resume_path=os.path.join(RES_OUT,'best_model_seg_big_94pm1.pt'))
-    dfd.resume(resume_path=os.path.join(RES_OUT,'best_model.pt'))
-    # dfd.resume()
-    # dfd.evaluate_model()
-    dfd.show_imgs_and_seg()
-    # dfd.show_imgs_and_seg(image_file='/home/yotamg/test/chk.raw')
-    # dfd.show_imgs_and_seg(image_file='/home/yotamg/data/no_filter/real_image/out_15.raw')
+    dfd = Dfd(config=config, net=net, device=device)
+    dfd.resume(resume_path=os.path.join(RES_OUT,'discrete_segmentation_80t1_97pm1.pt'))
     dfd.train()
     dfd.plot_metrics()

@@ -5,12 +5,14 @@ from os import path
 import os.path
 import numpy as np
 import sys
+import torch
 if sys.version_info[0] == 2:
     import cPickle as pickle
 else:
     import pickle
 
 import torch.utils.data as data
+from sintel_io import depth_read
 import random
 
 class depth_segmentation_dataset(data.Dataset):
@@ -18,11 +20,12 @@ class depth_segmentation_dataset(data.Dataset):
 
     def __init__(self, root, train=True,
                  transform=None, target_transform=None,
-                 load_pickle=True, train_dir=None, label_dir=None, test_dir=None):
+                 load_pickle=True, train_dir=None, label_dir=None, test_dir=None, add_noise=True):
         self.root = os.path.expanduser(root)
         self.transform = transform
         self.target_transform = target_transform
         self.train = train  # training set or test set
+        self.add_noise = add_noise
         if train:
             pickle_dir = path.join(train_dir, "pickle")
         else:
@@ -44,15 +47,18 @@ class depth_segmentation_dataset(data.Dataset):
                 self.train_labels = np.concatenate(self.train_labels)
             else:
                 for patch in os.listdir(train_dir):
-                    if patch.endswith('.jpg'):
+                    if patch.endswith('.raw'):
                         patch_path = path.join(train_dir, patch)
                         base = path.splitext(patch)[0]
-                        label = base + '.png'
+                        label = base + '.dpt'
                         label_path = path.join(label_dir,label)
-                        patch_file = Image.open(patch_path)
-                        patch_arr = np.array(patch_file)
-                        label_file = Image.open(label_path)
-                        label_arr = np.array(label_file)
+                        with open(patch_path, 'rb') as f:
+                            patch_arr = pickle.load(f)
+                        # patch_file = Image.open(patch_path)
+                        # patch_arr = np.array(patch_file)
+                        label_arr = depth_read(label_path)
+                        # label_file = Image.open(f)
+                        # label_arr = np.array(label_file)
                         if patch_arr.shape[0] == 436:
                             patch_arr_extended = np.zeros((512,1024,3), dtype=np.uint8)
                             patch_arr_extended[38:-38,:,:] = patch_arr
@@ -92,15 +98,18 @@ class depth_segmentation_dataset(data.Dataset):
                 self.test_labels = np.concatenate(self.test_labels)
             else:
                 for patch in os.listdir(test_dir):
-                    if patch.endswith('.jpg'):
+                    if patch.endswith('.raw'):
                         patch_path = path.join(test_dir, patch)
                         base = path.splitext(patch)[0]
-                        label = base + '.png'
+                        label = base + '.dpt'
                         label_path = path.join(label_dir, label)
-                        patch_file = Image.open(patch_path)
-                        patch_arr = np.array(patch_file)
-                        label_file = Image.open(label_path)
-                        label_arr = np.array(label_file)
+                        with open(patch_path, 'rb') as f:
+                            patch_arr = pickle.load(f)
+                        # patch_file = Image.open(patch_path)
+                        # patch_arr = np.array(patch_file)
+                        label_arr = depth_read(label_path)
+                        # label_file = Image.open(label_path)
+                        # label_arr = np.array(label_file)
                         if patch_arr.shape[0] == 436:
                             patch_arr_extended = np.zeros((512,1024,3), dtype=np.uint8)
                             patch_arr_extended[38:-38,:,:] = patch_arr
@@ -126,6 +135,15 @@ class depth_segmentation_dataset(data.Dataset):
                     pickle.dump(entry, pckl)
 
 
+    def noisy(self, image):
+        row, col, ch = image.shape
+        mean = 0
+        var = 0.0001
+        sigma = var ** 0.5
+        gauss = np.random.normal(mean, sigma, (row, col, ch))
+        gauss = gauss.reshape(row, col, ch)
+        return gauss
+
     def __getitem__(self, index):
         """
         Args:
@@ -148,6 +166,9 @@ class depth_segmentation_dataset(data.Dataset):
 
         if self.target_transform is not None:
             target = self.target_transform(target)
+
+        if self.add_noise:
+            img += torch.Tensor(self.noisy(img))
 
         return img, target
 
