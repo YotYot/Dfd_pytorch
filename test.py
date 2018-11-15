@@ -5,14 +5,14 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from cont_seg_with_semantic_net import Net
-from train_cont_depth import Dfd, DfdConfig, RES_OUT
+from train_cont_depth import Dfd, DfdConfig, RES_OUT, Net
 
 
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     np.set_printoptions(linewidth=320)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    config = DfdConfig(image_size='big', batch_size=1, mode='segmentation', target_mode='cont',lr=0.0001, get_reduced_dataset=False, num_classes=16,dataset='ours', end_epoch=300)
+    config = DfdConfig(image_size='big', batch_size=1, mode='segmentation', target_mode='cont', num_classes=16,dataset='ours')
     net = Net(config=config, device=device, num_class=config.num_classes,mode=config.mode, channels=64,skip_layer=True)
     # net = net.to(device)
     # net = ResNet18(mode='segmentation', num_classes=16,image_size='small')

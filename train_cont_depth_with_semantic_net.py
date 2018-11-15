@@ -16,11 +16,8 @@ import torch.optim as optim
 import random
 import time
 import pickle
-# from cont_seg_net import Net
-from cont_seg_with_semantic_net import Net
-
-
-
+from cont_seg_net import Net
+# from cont_seg_with_semantic_net import Net
 
 
 RES_OUT = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'resources_out')
@@ -268,12 +265,15 @@ class Dfd(object):
                     total += labels.flatten().size()[0]
                     if self.config.target_mode == 'discrete':
                         predicted = torch.argmax(outputs.data, dim=1)
+                        labels = labels.long()
+                        outputs_for_loss = outputs
                     else: #Cont
                         predicted = torch.round(outputs.data)
                         predicted = predicted.long()
                         predicted = torch.unsqueeze(predicted,dim=0)
+                        outputs_for_loss = outputs.unsqueeze(0)
+                    loss += self.criterion(outputs_for_loss, labels)
                     labels = labels.long()
-                    loss += self.criterion(outputs, labels)
                     correct += (predicted == labels).sum().item()
                     labels_plus = labels + 1
                     labels_minus = labels - 1
@@ -396,28 +396,12 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
     np.set_printoptions(linewidth=320)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    config = DfdConfig(image_size='big', batch_size=4, mode='segmentation', lr=0.01,target_mode='discrete', get_reduced_dataset=False, num_classes=16,dataset='ours', end_epoch=300)
+    config = DfdConfig(image_size='big', batch_size=4, mode='segmentation', lr=0.01,target_mode='cont', get_reduced_dataset=False, num_classes=16,dataset='ours', end_epoch=300)
     net = Net(device=device, num_class=config.num_classes,mode=config.mode, channels=64, config=config)
     dfd = Dfd(config=config, net=net, device=device)
-    # dfd.resume(resume_path='/home/yotamg/PycharmProjects/dfd/resources_out/discrete_segmentation_80t1_97pm1.pt')
-    # dfd.resume(resume_path='/home/yotamg/PycharmProjects/dfd/resources_out/best_bu.pt')
-    # net = ResNet18(mode='segmentation', num_classes=16,image_size='small')
-    # config = DfdConfig(image_size='big', batch_size=16, mode='segmentation', target_mode='cont',lr=0.0001, get_reduced_dataset=False, num_classes=16,dataset='ours', end_epoch=300)
-
-
-
-    # with open('/home/yotamg/data/raw_rgb_images/City_0062_rot2.raw', 'rb') as f:
-    #     img = pickle.load(f)
-    #
-    # feed_dict = dict()
-    # img = dfd.prepare_for_net(img)
-    # # img = torch.Tensor(img)
-    # feed_dict['img_data'] = img
-    # segmentation_module.to(device)
-
-
-    # dfd.resume(resume_path=os.path.join(RES_OUT,'cont_segmentation_96pm1.pt'))
+    dfd.resume(resume_path=os.path.join(RES_OUT,'best_bu.pt'))
     # for param in dfd.net.segmentation_module.parameters():
     #     param.requires_grad = False
+    # dfd.resume()
     dfd.train()
     dfd.plot_metrics()

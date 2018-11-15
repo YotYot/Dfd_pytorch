@@ -30,6 +30,7 @@ class Net(nn.Module):
         self.upsampling16 = nn.ConvTranspose2d(in_channels=num_class, out_channels=num_class, kernel_size=16,stride=16)
         self.conv9_from_pool3 = nn.Conv2d(64, num_class, kernel_size=1)
         self.upsampling8 = nn.ConvTranspose2d(in_channels=num_class, out_channels=num_class, kernel_size=8, stride=8)
+        self.last_conv = nn.Conv2d(19,16,1,1)
         self.conv8_reg = nn.Conv2d(16,1,1,1)
         self.conv8_reg.weight.data[0,:,0,0] = torch.arange(16).float()
         # self.conv8_reg.weight.requires_grad = False
@@ -41,7 +42,20 @@ class Net(nn.Module):
         self.skip_layer = skip_layer
         self.config = config
 
+    def align_tensor(self, aligned_tensor, input_tensor):
+        gapX = input_tensor.shape[2] - aligned_tensor.shape[2]
+        gapY = input_tensor.shape[3] - aligned_tensor.shape[3]
+        if gapX != 0 and gapY != 0:
+            aligned_tensor[:, :, :, :] = input_tensor[:, :, gapX // 2:-gapX // 2, gapY//2:-gapY//2]
+        elif gapX !=0:
+            aligned_tensor[:, :, :, :] = input_tensor[:, :, gapX // 2:-gapX // 2,:]
+        elif gapY != 0:
+            aligned_tensor[:, :, :, :] = input_tensor[:, :, :, gapY // 2:-gapY // 2]
+        return aligned_tensor
+
+
     def forward(self, x):
+        skip_input = x
         x = self.conv1(x)
         x = self.batch_norm1(x)
         x = F.relu(x)
@@ -60,22 +74,20 @@ class Net(nn.Module):
         if self.mode == 'segmentation':
             x = self.upsampling(x)
             if self.skip_layer:
-                skip_umsampled_aligned = torch.zeros_like(x)
-                skip_umsampled8_aligned = torch.zeros_like(x)
+                skip_upsampled_aligned = torch.zeros_like(x)
                 skip_upsampled = self.upsampling16(self.conv7_from_pool4(skip))
+                self.align_tensor(skip_upsampled_aligned, skip_upsampled)
+                del skip_upsampled
+                skip_upsampled8_aligned = torch.zeros_like(x)
                 skip_upsampled8 = self.upsampling8(self.conv9_from_pool3(skip8))
-                if (x.shape[3] != skip_upsampled.shape[3]):
-                    gap = skip_upsampled.shape[3] - x.shape[3]
-                    skip_umsampled_aligned[:,:,:,:] = skip_upsampled[:,:,:,gap//2:-gap//2]
-                else:
-                    skip_umsampled_aligned = skip_upsampled
-                if (x.shape != skip_upsampled8.shape):
-                    gapX = skip_upsampled8.shape[2] - x.shape[2]
-                    gapY = skip_upsampled8.shape[3] - x.shape[3]
-                    skip_umsampled8_aligned[:,:,:,:] = skip_upsampled8[:,:,gapX//2:-gapX//2,gapY//2:-gapY//2]
-                else:
-                    skip_umsampled8_aligned = skip_upsampled8
-                x = x + skip_umsampled_aligned + skip_umsampled8_aligned
+                self.align_tensor(skip_upsampled8_aligned, skip_upsampled8)
+                del skip_upsampled8
+                skip_input_aligned = torch.zeros((x.shape[0], 3,x.shape[2], x.shape[3]))
+                skip_input_aligned = self.align_tensor(skip_input_aligned, skip_input)
+                skip_input_aligned = skip_input_aligned.to(self.device)
+                x = x + skip_upsampled_aligned + skip_upsampled8_aligned
+                x = torch.cat((x, skip_input_aligned), dim=1)
+                x = self.last_conv(x)
             if self.config.target_mode == 'cont':
                 x = self.softmax(x)
                 x = self.conv8_reg(x)
