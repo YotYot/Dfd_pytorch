@@ -1,80 +1,107 @@
-import torch
-import pickle
-import time
-import os
-import numpy as np
-import matplotlib.pyplot as plt
-from cont_seg_with_semantic_net import Net
-from train_cont_depth import Dfd, DfdConfig, RES_OUT, Net
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+from matplotlib import pyplot as plt
+import torch.nn.functional as F
+import os
+import argparse
+from PIL import Image
+
+# ours
+from models import Net
+from dataloader import Dataset
+from skimage.measure import compare_ssim,compare_psnr
+from utils import *
+import torchvision.transforms as transforms
+
+
+LR0 = 1e-7
+
+def get_args():
+    parser = argparse.ArgumentParser(description='PyTorch DfdNet Training')
+    parser.add_argument('--load_model', type=lambda x: (str(x).lower() == 'true'), default=False,
+                        help='load trained model')
+    parser.add_argument('--train', type=lambda x: (str(x).lower() == 'true'), default=True, help='train model')
+    parser.add_argument('--epochs', type=int, default=10, help='num of epochs')
+    parser.add_argument('--experiment_name', type=str, default='default', help='exp name')
+    parser.add_argument('--target', type=str, default='segmentation', help='target - classificaion or segmentation')
+    parser.add_argument('--target_mode', type=str, default='discrete', help='target mode - cont or discrete')
+    args = parser.parse_args()
+
+    return args
+
+
+def main():
+    args = get_args()
+    print(args)
+
+    # set device
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+
+    # test_dir = '/media/yotamg/bd0eccc9-4cd5-414c-b764-c5a7890f9785/Yotam/Sintel/Filtered/rgb'
+    # label_dir = '/media/yotamg/bd0eccc9-4cd5-414c-b764-c5a7890f9785/Yotam/Sintel/Filtered/GT'
+    #
+    # test_filelist        = [os.path.join(test_dir, img) for img in os.listdir(test_dir) if 'alley_1' in img]
+    # test_labels_filelist = [img.replace(test_dir,label_dir).replace('_1100_maskImg.png', '_GT.dpt') for img in test_filelist]
+
+    transform = transforms.Compose(
+        [transforms.ToTensor(),
+         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+    # test_dataset = Dataset(image_filelist=test_filelist, label_filelist=test_labels_filelist, transforms=transform, pickle_name='test.pickle', train=False)
+    #
+    # test_data_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=True, num_workers=8)
+
+    train_dir = '/home/yotamg/data/raw_rgb_pngs'
+    train_filelist = [os.path.join(train_dir, img) for img in os.listdir(train_dir)]
+    test_filelist = train_filelist
+    label_dir = '/media/yotamg/bd0eccc9-4cd5-414c-b764-c5a7890f9785/Yotam/Depth_sintel_and_tau_from_shay/'
+    train_label_filelist = [img.replace(train_dir, label_dir).replace('.png', '.dpt') for img in train_filelist]
+    test_label_filelist = train_label_filelist
+
+    train_dataset = Dataset(image_filelist=train_filelist, label_filelist=train_label_filelist, train=True,
+                            pickle_name='train_old_imgs_discrete.pickle', transforms=transform,
+                            target_mode=args.target_mode)
+    test_dataset = Dataset(image_filelist=test_filelist, label_filelist=test_label_filelist, train=False,
+                           pickle_name='test_old_imgs_discrete.pickle', transforms=transform,
+                           target_mode=args.target_mode)
+
+    train_data_loader = torch.utils.data.DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=1)
+    test_data_loader = torch.utils.data.DataLoader(test_dataset, batch_size=16, shuffle=True, num_workers=1)
+
+
+
+    net = Net(device=device, mode=args.target, target_mode=args.target_mode)
+    net = net.eval()
+    net = net.to(device)
+    load_model(net,device, fullpath='/home/yotamg/PycharmProjects/dfd/trained_models/Net_default/checkpoint_31.pth.tar')
+
+    for i, data in enumerate(test_data_loader):
+        # x,x_paths, y, y_paths = data
+        x, x_path, y, y_path = data
+        x = x.to(device)
+        with torch.no_grad():
+            out = net(x)
+        out = out.detach().cpu().numpy()
+        x = x.detach().cpu().numpy()
+        plt.figure(1)
+        out = np.argmax(out, axis=1)
+        # out = np.squeeze(out,0)
+        out = (out - np.min(out)) / (np.max(out) - np.min(out))
+        ax1 = plt.subplot(1,3,2)
+        ax1.imshow(y[0])
+        ax2 = plt.subplot(1,3,1, sharex=ax1, sharey=ax1)
+        x = (x + 1) / 2
+        ax2.imshow(np.transpose(x[0], (1, 2, 0)))
+        ax3 = plt.subplot(1, 3, 3, sharex=ax1,sharey=ax1)
+        ax3.imshow(out[0])
+        # plt.suptitle(label, fontsize="large")
+        plt.show()
 
 if __name__ == '__main__':
-    torch.cuda.empty_cache()
-    np.set_printoptions(linewidth=320)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    config = DfdConfig(image_size='big', batch_size=1, mode='segmentation', target_mode='cont', num_classes=16,dataset='ours')
-    net = Net(config=config, device=device, num_class=config.num_classes,mode=config.mode, channels=64,skip_layer=True)
-    # net = net.to(device)
-    # net = ResNet18(mode='segmentation', num_classes=16,image_size='small')
-    dfd = Dfd(config=config, net=net, device=device)
-    # dfd.resume(resume_path=os.path.join(RES_OUT,'discrete_segmentation_80t1_97pm1.pt'))
-    dfd.resume()
-    # dfd.resume(resume_path=os.path.join(RES_OUT, 'cont_segmentation_96pm1.pt'))
-    # dfd.resume(resume_path=os.path.join(RES_OUT, 'best_model_raw_80top1_96pm1.pt'))
-    # dfd.resume(resume_path=os.path.join(RES_OUT,'cont_from_scratch_59top1_94pm1.pt'), ordinal=True)
-    # dfd.resume(resume_path=os.path.join(RES_OUT,'best_model.pt'))
-    # dfd.show_imgs_and_seg(image_file='/home/yotamg/data/no_filter/real_image/out_15.raw',
-    #                           label_file='/home/yotamg/data/depth_pngs/City_0212_rot1.png', patch_size=256)
-    # dfd.show_imgs_and_seg(image_file='/home/yotamg/test/chk.raw',
-    #                       label_file='/home/yotamg/data/depth_pngs/City_0212_rot1.png', patch_size=256)
-
-    num_of_checkpoints = len(os.listdir('resources_out'))
-    with open('/home/yotamg/data/no_filter/real_image/out_15.raw', 'rb') as f:
-        img = pickle.load(f)
-    f.close()
-    # with open('/home/yotamg/test/chk.raw', 'rb') as f:
-    #     img = pickle.load(f)
-    # f.close()
-    from PIL import Image
-    # img = Image.fromarray(img)
-    # img = img.resize((1000,1000))
-    # img = np.array(img)
-    # plt.subplot(4,4, 1)
-    # plt.imshow(img)
-    # plt.subplot(4,4, 2)
-    # plt.imshow(img2)
-    # img = np.array(img)
-    img = dfd.prepare_for_net(img)
-    # img2 = np.array(img2)
-    # img2 = dfd.prepare_for_net(img2)
-
-    # for i, checkpoint in enumerate(os.listdir('resources_out')):
-    #     # print (checkpoint)
-    #     dfd.resume(resume_path=os.path.join(RES_OUT,checkpoint))
-        # dfd.resume()
-        # dfd.show_imgs_and_seg()
-    time_before = time.time()
-    with torch.no_grad():
-    #     for param in dfd.net.segmentation_module.parameters():
-    #         param.requires_grad = False
-        img1_predict = dfd.net(img)
-    print ("Time for inference: ", time.time() - time_before)
-        # img2_predict = dfd.net(img2)
-        # plt.subplot(2,4,i+1)
-        # plt.title(checkpoint)
-        # plt.imshow(img1_predict, cmap='jet')
-        # # plt.subplot(4,4,i+10)
-        # # plt.title(checkpoint)
-        # # plt.imshow(img2_predict, cmap='jet')
-        # # break
-    if dfd.config.target_mode == 'discrete':
-        img1_predict = torch.squeeze(torch.argmax(img1_predict, dim=1),0)
-    #     img2_predict = torch.squeeze(torch.argmax(img2_predict, dim=1),0)
-    # print (img1_predict.shape)
-
-    plt.figure(1)
-    plt.imshow(img1_predict, cmap='jet')
-    # plt.figure(2)
-    # plt.imshow(img2_predict, cmap='jet')
-    plt.show()
-    print ("Done!")
+    main()
